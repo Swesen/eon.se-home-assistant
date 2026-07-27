@@ -7,6 +7,9 @@ MANUFACTURER = "E.ON Sweden"
 CONF_PERSONNUMMER = "personnummer"
 CONF_PASSWORD = "password"
 CONF_FACILITY_IDS = "facility_ids"  # Optional list to filter facilities
+CONF_ACCESS_TOKEN = "access_token"   # Pre-obtained token (token-paste flow)
+CONF_REFRESH_TOKEN = "refresh_token" # Pre-obtained refresh token
+CONF_TOKEN_EXPIRES_AT = "token_expires_at"  # monotonic-independent wall-clock expiry (unix ts)
 
 # Coordinator
 UPDATE_INTERVAL_MINUTES = 15

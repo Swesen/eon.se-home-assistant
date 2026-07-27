@@ -257,6 +257,7 @@ class EonApiClient:
         self._dpop_public_jwk: dict = {}
         self._haapi_nonce: str | None = None
         self._browser_username_cookie = browser_username_cookie
+        self._on_token_refresh: Any = None  # optional async callback set by __init__.py
 
     # ------------------------------------------------------------------
     # Authentication  (Curity HAAPI + DPoP + PKCE)
@@ -291,6 +292,13 @@ class EonApiClient:
             "Token stored: expires_in=%ss, has_refresh=%s",
             expires_in, self._refresh_token is not None,
         )
+        # Notify the HA integration so it can persist the new tokens
+        if self._on_token_refresh is not None:
+            import asyncio
+            try:
+                asyncio.get_event_loop().create_task(self._on_token_refresh())
+            except Exception:  # noqa: BLE001
+                pass
 
     async def ensure_token(self) -> None:
         """Ensure the access token is valid, using refresh_token if near expiry.

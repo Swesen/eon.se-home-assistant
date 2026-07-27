@@ -2,11 +2,28 @@
   "config": {
     "step": {
       "user": {
+        "title": "E.ON Sweden – Setup",
+        "description": "Choose how to authenticate.\n\n**Credentials** — Home Assistant will open a headless browser to log in (requires Playwright, not available on HA OS).\n\n**Paste tokens** — Run the `get_tokens.py` helper script on your PC, then paste the tokens here. No browser needed on HA.",
+        "data": {
+          "auth_method": "Authentication method"
+        }
+      },
+      "credentials": {
         "title": "E.ON Sweden – Log in",
-        "description": "Enter your E.ON Sweden login credentials (same as eon.se/login/privat/username).",
+        "description": "Enter your E.ON Sweden credentials. A headless browser will be launched to complete the login.",
         "data": {
           "personnummer": "Personal identity number (personnummer)",
           "password": "Password"
+        }
+      },
+      "tokens": {
+        "title": "E.ON Sweden – Paste tokens",
+        "description": "Run `python get_tokens.py` on your PC and paste the output here.\n\nYour personnummer and password are also required so the integration can re-authenticate automatically if the refresh token ever expires.",
+        "data": {
+          "personnummer": "Personal identity number (personnummer)",
+          "password": "Password",
+          "access_token": "Access token (from get_tokens.py)",
+          "refresh_token": "Refresh token (from get_tokens.py)"
         }
       },
       "facilities": {
@@ -20,6 +37,7 @@
     "error": {
       "invalid_auth": "Invalid personnummer or password. Please try again.",
       "cannot_connect": "Could not connect to E.ON Sweden. Check your internet connection and try again.",
+      "playwright_missing": "Playwright is not installed. Use 'Paste tokens' instead — run get_tokens.py on your PC.",
       "unknown": "An unexpected error occurred."
     },
     "abort": {
