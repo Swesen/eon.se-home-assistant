@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "E.ON Sweden – Log in",
+        "description": "Enter your E.ON Sweden login credentials (same as eon.se/login/privat/username).",
+        "data": {
+          "personnummer": "Personal identity number (personnummer)",
+          "password": "Password"
+        }
+      },
+      "facilities": {
+        "title": "Select facilities",
+        "description": "Choose which metering facilities to include. All are selected by default.",
+        "data": {
+          "facility_ids": "Facilities"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid personnummer or password. Please try again.",
+      "cannot_connect": "Could not connect to E.ON Sweden. Check your internet connection and try again.",
+      "unknown": "An unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This E.ON account is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "E.ON Sweden options",
+        "data": {
+          "facility_ids": "Facility IDs to include (leave empty for all)"
+        }
+      }
+    }
+  }
+}

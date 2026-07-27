@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "E.ON Sweden – Logga in",
+        "description": "Ange dina inloggningsuppgifter för E.ON Sverige (samma som på eon.se/login/privat/username).",
+        "data": {
+          "personnummer": "Personnummer",
+          "password": "Lösenord"
+        }
+      },
+      "facilities": {
+        "title": "Välj anläggningar",
+        "description": "Välj vilka mätpunkter som ska inkluderas. Alla är valda som standard.",
+        "data": {
+          "facility_ids": "Anläggningar"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Felaktigt personnummer eller lösenord. Försök igen.",
+      "cannot_connect": "Kunde inte ansluta till E.ON Sverige. Kontrollera din internetanslutning och försök igen.",
+      "unknown": "Ett oväntat fel uppstod."
+    },
+    "abort": {
+      "already_configured": "Det här E.ON-kontot är redan konfigurerat."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "E.ON Sverige – inställningar",
+        "data": {
+          "facility_ids": "Anläggnings-ID att inkludera (lämna tomt för alla)"
+        }
+      }
+    }
+  }
+}

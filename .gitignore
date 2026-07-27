@@ -1,0 +1,16 @@
+# Credentials – never commit
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# Test artifacts
+test_browser_auth_input.json
+test_local.py
+
+# VS Code
+.vscode/
