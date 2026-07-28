@@ -26,4 +26,7 @@ schema:
   log_level: list(debug|info|warning|error)
 map:
   - data:rw
-image: "ghcr.io/swesen/eon-se-home-assistant/eon-se-auth-addon-{arch}"
+build_from:
+  amd64: "debian:bookworm-slim"
+  aarch64: "debian:bookworm-slim"
+  armv7: "debian:bookworm-slim"

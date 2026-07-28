@@ -1,4 +1,4 @@
-ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-debian:bookworm
+ARG BUILD_FROM=debian:bookworm-slim
 FROM ${BUILD_FROM}
 
 # Install Python and system dependencies for Playwright/Chromium

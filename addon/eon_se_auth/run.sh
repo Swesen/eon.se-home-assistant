@@ -1,11 +1,9 @@
-#!/usr/bin/with-contenv bashio
+#!/bin/bash
+set -e
 
-bashio::log.info "Starting E.ON Sweden Auth server..."
+echo "[eon_se_auth] Starting E.ON Sweden Auth server..."
 
-# Read options
-export EON_PERSONNUMMER="$(bashio::config 'personnummer')"
-export EON_PASSWORD="$(bashio::config 'password')"
-export LOG_LEVEL="$(bashio::config 'log_level')"
+# HA Supervisor writes add-on options to /data/options.json
+# auth_server.py reads this file directly, so no bashio needed.
 
-bashio::log.info "Auth server listening on port 8099"
 exec python3 /app/auth_server.py
