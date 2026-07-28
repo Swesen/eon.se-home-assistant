@@ -19,7 +19,11 @@
     },
     "error": {
       "invalid_auth": "Felaktigt personnummer eller lösenord. Försök igen.",
+      "invalid_code": "Ogiltig eller utgången kod — öppna inloggningslänken igen och klistra in den nya koden.",
+      "addon_unreachable": "Kan inte nå auth-tillägget på denna URL. Kontrollera att det är installerat och igång.",
+      "addon_not_running": "E.ON Auth-tillägget hittades inte. Se till att det är installerat, startat och visar 'Running' på tilläggets Info-flik.",
       "cannot_connect": "Kunde inte ansluta till E.ON Sverige. Kontrollera din internetanslutning och försök igen.",
+      "playwright_missing": "Playwright är inte installerat. Installera E.ON Auth-tillägget istället.",
       "unknown": "Ett oväntat fel uppstod."
     },
     "abort": {

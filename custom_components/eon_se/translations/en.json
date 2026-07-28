@@ -19,7 +19,11 @@
     },
     "error": {
       "invalid_auth": "Invalid personnummer or password. Please try again.",
+      "invalid_code": "Invalid or expired code — open the login link again and paste the new code.",
+      "addon_unreachable": "Cannot reach the auth add-on at this URL. Check it is installed and running.",
+      "addon_not_running": "E.ON Auth add-on not detected. Make sure it is installed, started, and shows 'Running' in the add-on Info tab.",
       "cannot_connect": "Could not connect to E.ON Sweden. Check your internet connection and try again.",
+      "playwright_missing": "Playwright is not installed. Install the E.ON Auth add-on instead.",
       "unknown": "An unexpected error occurred."
     },
     "abort": {

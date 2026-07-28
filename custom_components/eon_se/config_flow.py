@@ -65,6 +65,46 @@ async def _probe_addon(session: aiohttp.ClientSession, url: str) -> bool:
         return False
 
 
+async def _discover_addon_url(session: aiohttp.ClientSession) -> str | None:
+    """Discover the add-on URL, preferring the Supervisor API over mDNS.
+
+    In HA OS, add-ons run in separate Docker containers and homeassistant.local
+    may not resolve via mDNS from within the HA core container.  The Supervisor
+    API is the reliable way to obtain the add-on's internal IP.
+    """
+    import os
+
+    # --- Method 1: Supervisor API (only works on HA OS / Supervisor) ---
+    supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
+    if supervisor_token:
+        try:
+            async with session.get(
+                "http://supervisor/addons/eon_se_auth/info",
+                headers={"Authorization": f"Bearer {supervisor_token}"},
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    addon_data = data.get("data", {})
+                    if addon_data.get("state") == "started":
+                        ip = addon_data.get("ip_address", "")
+                        if ip and ip != "0.0.0.0":
+                            url = f"http://{ip}:8099"
+                            if await _probe_addon(session, url):
+                                _LOGGER.debug(
+                                    "Discovered add-on via Supervisor API at %s", url
+                                )
+                                return url
+        except Exception as err:
+            _LOGGER.debug("Supervisor API probe failed: %s", err)
+
+    # --- Method 2: Direct probe at homeassistant.local (works on some setups) ---
+    if await _probe_addon(session, ADDON_AUTH_DEFAULT_URL):
+        return ADDON_AUTH_DEFAULT_URL
+
+    return None
+
+
 class EonConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for E.ON Sweden."""
 
@@ -86,16 +126,15 @@ class EonConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Step 1: enter credentials and optional add-on URL."""
         errors: dict[str, str] = {}
 
-        # Probe whether the add-on is running at the default URL
+        # Discover the add-on URL (Supervisor API → direct probe fallback)
         session = async_create_clientsession(self.hass)
-        addon_available = await _probe_addon(session, ADDON_AUTH_DEFAULT_URL)
+        detected_addon_url = await _discover_addon_url(session)
+        addon_available = detected_addon_url is not None
 
         if user_input is not None:
             personnummer = user_input[CONF_PERSONNUMMER].strip()
             password = user_input[CONF_PASSWORD]
-            addon_url = user_input.get(CONF_ADDON_URL, "").strip() or (
-                ADDON_AUTH_DEFAULT_URL if addon_available else ""
-            )
+            addon_url = user_input.get(CONF_ADDON_URL, "").strip() or detected_addon_url or ""
 
             await self.async_set_unique_id(personnummer)
             self._abort_if_unique_id_configured()
@@ -109,12 +148,15 @@ class EonConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "invalid_auth"
             except EonApiError as err:
                 _LOGGER.warning("E.ON API error during setup: %s", err)
-                if "playwright" in str(err).lower() or "subprocess" in str(err).lower():
+                err_str = str(err).lower()
+                if "playwright" in err_str or "subprocess" in err_str or "no output" in err_str:
                     errors["base"] = "playwright_missing"
-                elif "add-on" in str(err).lower() or "Cannot reach" in str(err):
+                elif "add-on" in err_str or "Cannot reach" in str(err):
                     errors[CONF_ADDON_URL] = "addon_unreachable"
-                else:
+                elif "token exchange" in err_str:
                     errors["base"] = "cannot_connect"
+                else:
+                    errors["base"] = "addon_not_running"
             except Exception:
                 _LOGGER.exception("Unexpected error during config flow")
                 errors["base"] = "unknown"
@@ -136,7 +178,7 @@ class EonConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Required(CONF_PASSWORD): str,
             vol.Optional(
                 CONF_ADDON_URL,
-                default=ADDON_AUTH_DEFAULT_URL if addon_available else "",
+                default=detected_addon_url or "",
             ): str,
         })
 

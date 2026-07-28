@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 
 import aiohttp
@@ -38,6 +39,46 @@ SERVICE_PUSH_TOKENS_SCHEMA = vol.Schema(
 )
 
 
+async def _probe_addon(session: aiohttp.ClientSession, url: str) -> bool:
+    """Return True if the E.ON Auth add-on is reachable at the given URL."""
+    try:
+        async with session.get(
+            f"{url.rstrip('/')}/health",
+            timeout=aiohttp.ClientTimeout(total=4),
+        ) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+async def _discover_addon_url(session: aiohttp.ClientSession) -> str | None:
+    """Discover the add-on URL via Supervisor API, falling back to direct probe."""
+    supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
+    if supervisor_token:
+        try:
+            async with session.get(
+                "http://supervisor/addons/eon_se_auth/info",
+                headers={"Authorization": f"Bearer {supervisor_token}"},
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    addon_data = data.get("data", {})
+                    if addon_data.get("state") == "started":
+                        ip = addon_data.get("ip_address", "")
+                        if ip and ip != "0.0.0.0":
+                            url = f"http://{ip}:8099"
+                            if await _probe_addon(session, url):
+                                return url
+        except Exception as err:
+            _LOGGER.debug("Supervisor API probe failed: %s", err)
+
+    if await _probe_addon(session, ADDON_AUTH_DEFAULT_URL):
+        return ADDON_AUTH_DEFAULT_URL
+
+    return None
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up E.ON Sweden from a config entry."""
 
@@ -47,21 +88,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     session = async_create_clientsession(hass)
 
-    # Resolve the auth add-on URL — stored in config, or probe the default
+    # Resolve the auth add-on URL — stored in config, or discover via Supervisor API
     addon_url: str | None = entry.data.get(CONF_ADDON_URL) or None
     if not addon_url:
-        # Try to auto-detect the add-on at the default URL
-        try:
-            probe_session = async_create_clientsession(hass)
-            async with probe_session.get(
-                f"{ADDON_AUTH_DEFAULT_URL}/health",
-                timeout=aiohttp.ClientTimeout(total=3),
-            ) as resp:
-                if resp.status == 200:
-                    addon_url = ADDON_AUTH_DEFAULT_URL
-                    _LOGGER.info("Auto-detected E.ON Auth add-on at %s", addon_url)
-        except Exception:
-            pass
+        addon_url = await _discover_addon_url(async_create_clientsession(hass))
+        if addon_url:
+            _LOGGER.info("Auto-detected E.ON Auth add-on at %s", addon_url)
 
     client = EonApiClient(personnummer, password, session, addon_url=addon_url)
 
