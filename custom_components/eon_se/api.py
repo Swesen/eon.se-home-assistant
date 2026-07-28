@@ -265,14 +265,15 @@ class EonApiClient:
     # ------------------------------------------------------------------
 
     async def authenticate(self) -> None:
-        """Full authentication flow to obtain a Bearer token.
-
-        Uses a headless Chromium browser (via Playwright) to complete the HAAPI
-        authorization flow — the browser runs the Curity WASM attestation natively,
-        fills in credentials via the HAAPI hypermedia API, and returns the auth code.
-        """
+        """Full authentication flow to obtain a Bearer token."""
         self._dpop_private_key, self._dpop_public_jwk = _generate_dpop_keypair()
         auth_result = await self._browser_haapi_auth()
+        # If the add-on already exchanged the code for tokens, _store_token_response
+        # was called inside _addon_haapi_auth — no further exchange needed.
+        if "access_token" in auth_result:
+            _LOGGER.debug("Authenticated via add-on (tokens provided directly)")
+            return
+        # Legacy / local Playwright path: exchange code for tokens
         token_response = await self._exchange_code(
             auth_result["code"], auth_result["code_verifier"]
         )
@@ -363,7 +364,12 @@ class EonApiClient:
         return await self._local_playwright_haapi_auth()
 
     async def _addon_haapi_auth(self) -> dict:
-        """Call the E.ON Auth add-on's POST /auth endpoint."""
+        """Call the E.ON Auth add-on's POST /auth endpoint.
+
+        The add-on now performs the full auth + token exchange and returns
+        {access_token, refresh_token, expires_in} directly, so no further
+        network calls to api.apps.eon.se are needed from HA core.
+        """
         import json as _json
         url = f"{self._addon_url.rstrip('/')}/auth"
         _LOGGER.debug("Requesting auth from add-on: %s", url)
@@ -378,9 +384,17 @@ class EonApiClient:
                     raise EonApiError(f"Add-on returned HTTP {resp.status}: {data.get('error', data)}")
                 if "error" in data:
                     raise EonAuthError(f"Add-on auth error: {data['error']}")
+
+                # New format: add-on already exchanged code for tokens
+                if "access_token" in data:
+                    _LOGGER.debug("Add-on returned tokens directly")
+                    self._store_token_response(data)
+                    return data
+
+                # Legacy format: code + code_verifier (fall through to exchange)
                 if "code" not in data:
-                    raise EonApiError(f"Add-on response missing 'code': {data}")
-                _LOGGER.debug("Add-on auth succeeded, got auth code")
+                    raise EonApiError(f"Add-on response missing 'access_token' and 'code': {data}")
+                _LOGGER.debug("Add-on returned auth code (legacy), exchanging for tokens")
                 return data
         except (aiohttp.ClientConnectorError, aiohttp.ServerConnectionError) as err:
             raise EonApiError(f"Cannot reach auth add-on at {url}: {err}") from err
@@ -426,6 +440,11 @@ class EonApiClient:
 
         if "error" in result:
             raise EonAuthError(f"Browser auth failed: {result['error']}")
+
+        # New format: haapi_browser_auth.py now returns tokens directly
+        if "access_token" in result:
+            _LOGGER.debug("Browser auth returned tokens directly")
+            return result
 
         if "code" not in result or "code_verifier" not in result:
             raise EonAuthError(f"Browser auth missing code/verifier: {result}")

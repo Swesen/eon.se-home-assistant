@@ -359,10 +359,46 @@ async ({driverSrc, authzUrl, username, password}) => {
     print(f"Result: {json.dumps({k: v for k, v in result.items() if k != 'logs'})[:500]}", file=sys.stderr)
 
     if result.get("code"):
-        print(json.dumps({
+        # Exchange the auth code for tokens right here,
+        # so the caller doesn't need to make any further calls to api.apps.eon.se
+        import urllib.request as _req
+        import urllib.parse as _parse
+
+        token_url = "https://api.apps.eon.se/neo/oauth/v2/token"
+        body = _parse.urlencode({
+            "client_id": "eon-web-light-haapi",
+            "grant_type": "authorization_code",
             "code": result["code"],
             "code_verifier": code_verifier,
-        }))
+            "redirect_uri": REDIRECT_URI,
+        }).encode()
+
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "*/*",
+            "Origin": "https://www.eon.se",
+            "Referer": "https://www.eon.se/",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/126.0.0.0 Safari/537.36"
+            ),
+        }
+
+        try:
+            req = _req.Request(token_url, data=body, headers=headers, method="POST")
+            with _req.urlopen(req, timeout=30) as resp:
+                token_data = json.loads(resp.read().decode())
+            if "access_token" not in token_data:
+                print(json.dumps({"error": f"Token exchange missing access_token: {list(token_data.keys())}"}))
+            else:
+                print(json.dumps({
+                    "access_token": token_data["access_token"],
+                    "refresh_token": token_data.get("refresh_token", ""),
+                    "expires_in": token_data.get("expires_in", 900),
+                }))
+        except Exception as e:
+            print(json.dumps({"error": f"Token exchange failed: {e}"}))
     elif result.get("error"):
         print(json.dumps({"error": result["error"]}))
     else:
