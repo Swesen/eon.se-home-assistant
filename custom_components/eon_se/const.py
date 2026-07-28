@@ -10,6 +10,10 @@ CONF_FACILITY_IDS = "facility_ids"  # Optional list to filter facilities
 CONF_ACCESS_TOKEN = "access_token"   # Pre-obtained token (token-paste flow)
 CONF_REFRESH_TOKEN = "refresh_token" # Pre-obtained refresh token
 CONF_TOKEN_EXPIRES_AT = "token_expires_at"  # monotonic-independent wall-clock expiry (unix ts)
+CONF_ADDON_URL = "addon_url"         # URL of the E.ON Auth add-on, e.g. http://homeassistant.local:8099
+
+# Default URL of the auth add-on (port mapped to HA host)
+ADDON_AUTH_DEFAULT_URL = "http://homeassistant.local:8099"
 
 # Coordinator
 UPDATE_INTERVAL_MINUTES = 15

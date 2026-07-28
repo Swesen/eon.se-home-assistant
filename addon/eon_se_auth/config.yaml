@@ -1,0 +1,29 @@
+name: "E.ON Sweden Auth"
+description: >
+  Headless browser authentication helper for the E.ON Sweden integration.
+  Runs a Chromium browser to complete the Curity HAAPI/WASM attestation flow
+  so Home Assistant can obtain tokens automatically — no manual steps needed.
+version: "1.0.0"
+slug: eon_se_auth
+init: false
+arch:
+  - amd64
+  - aarch64
+  - armv7
+startup: services
+boot: auto
+ports:
+  8099/tcp: 8099
+ports_description:
+  8099/tcp: "Auth API (used internally by the E.ON Sweden integration)"
+options:
+  personnummer: ""
+  password: ""
+  log_level: "info"
+schema:
+  personnummer: str
+  password: password
+  log_level: list(debug|info|warning|error)
+map:
+  - data:rw
+image: "ghcr.io/swesen/eon-se-home-assistant/eon-se-auth-addon-{arch}"

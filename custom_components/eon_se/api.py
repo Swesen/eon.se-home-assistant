@@ -246,7 +246,7 @@ def _pkce_pair() -> tuple[str, str]:
 class EonApiClient:
     """Async HTTP client for the E.ON Sweden backend API."""
 
-    def __init__(self, personnummer: str, password: str, session: aiohttp.ClientSession, browser_username_cookie: str | None = None) -> None:
+    def __init__(self, personnummer: str, password: str, session: aiohttp.ClientSession, browser_username_cookie: str | None = None, addon_url: str | None = None) -> None:
         self._personnummer = personnummer
         self._password = password
         self._session = session
@@ -257,6 +257,7 @@ class EonApiClient:
         self._dpop_public_jwk: dict = {}
         self._haapi_nonce: str | None = None
         self._browser_username_cookie = browser_username_cookie
+        self._addon_url: str | None = addon_url
         self._on_token_refresh: Any = None  # optional async callback set by __init__.py
 
     # ------------------------------------------------------------------
@@ -346,7 +347,46 @@ class EonApiClient:
             raise EonApiError(f"Token refresh failed: {err}") from err
 
     async def _browser_haapi_auth(self) -> dict:
-        """Launch a headless browser, drive the HAAPI flow, and return {code, code_verifier}."""
+        """Obtain {code, code_verifier} via the auth add-on or a local Playwright subprocess.
+
+        Priority:
+          1. Add-on HTTP server (POST http://<addon_url>/auth) — works on HA OS
+          2. Local Playwright subprocess — works on developer machines
+        """
+        # Try the add-on first
+        if self._addon_url:
+            try:
+                return await self._addon_haapi_auth()
+            except Exception as err:
+                _LOGGER.warning("Add-on auth failed (%s); falling back to local Playwright", err)
+
+        return await self._local_playwright_haapi_auth()
+
+    async def _addon_haapi_auth(self) -> dict:
+        """Call the E.ON Auth add-on's POST /auth endpoint."""
+        import json as _json
+        url = f"{self._addon_url.rstrip('/')}/auth"
+        _LOGGER.debug("Requesting auth from add-on: %s", url)
+        try:
+            async with self._session.post(
+                url,
+                json={"username": self._personnummer, "password": self._password},
+                timeout=aiohttp.ClientTimeout(total=120),
+            ) as resp:
+                data = await resp.json(content_type=None)
+                if resp.status != 200:
+                    raise EonApiError(f"Add-on returned HTTP {resp.status}: {data.get('error', data)}")
+                if "error" in data:
+                    raise EonAuthError(f"Add-on auth error: {data['error']}")
+                if "code" not in data:
+                    raise EonApiError(f"Add-on response missing 'code': {data}")
+                _LOGGER.debug("Add-on auth succeeded, got auth code")
+                return data
+        except (aiohttp.ClientConnectorError, aiohttp.ServerConnectionError) as err:
+            raise EonApiError(f"Cannot reach auth add-on at {url}: {err}") from err
+
+    async def _local_playwright_haapi_auth(self) -> dict:
+        """Launch a headless browser subprocess (requires Playwright installed locally)."""
         import json as _json
         import asyncio.subprocess as asp
         import sys

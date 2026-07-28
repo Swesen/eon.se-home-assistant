@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import time
 
+import aiohttp
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -13,7 +14,9 @@ from homeassistant.helpers import config_validation as cv
 
 from .api import EonApiClient
 from .const import (
+    ADDON_AUTH_DEFAULT_URL,
     CONF_ACCESS_TOKEN,
+    CONF_ADDON_URL,
     CONF_FACILITY_IDS,
     CONF_PASSWORD,
     CONF_PERSONNUMMER,
@@ -43,7 +46,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     facility_filter: list[str] = entry.data.get(CONF_FACILITY_IDS, [])
 
     session = async_create_clientsession(hass)
-    client = EonApiClient(personnummer, password, session)
+
+    # Resolve the auth add-on URL — stored in config, or probe the default
+    addon_url: str | None = entry.data.get(CONF_ADDON_URL) or None
+    if not addon_url:
+        # Try to auto-detect the add-on at the default URL
+        try:
+            probe_session = async_create_clientsession(hass)
+            async with probe_session.get(
+                f"{ADDON_AUTH_DEFAULT_URL}/health",
+                timeout=aiohttp.ClientTimeout(total=3),
+            ) as resp:
+                if resp.status == 200:
+                    addon_url = ADDON_AUTH_DEFAULT_URL
+                    _LOGGER.info("Auto-detected E.ON Auth add-on at %s", addon_url)
+        except Exception:
+            pass
+
+    client = EonApiClient(personnummer, password, session, addon_url=addon_url)
 
     # Restore saved tokens so we don't need Playwright on every HA restart.
     saved_access = entry.data.get(CONF_ACCESS_TOKEN, "")

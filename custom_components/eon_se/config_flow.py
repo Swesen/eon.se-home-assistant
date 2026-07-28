@@ -16,6 +16,308 @@ from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
+from .api import EonApiClient, EonApiError, EonAuthError, _pkce_pair
+from .const import (
+    ADDON_AUTH_DEFAULT_URL,
+    CONF_ACCESS_TOKEN,
+    CONF_ADDON_URL,
+    CONF_FACILITY_IDS,
+    CONF_PASSWORD,
+    CONF_PERSONNUMMER,
+    CONF_REFRESH_TOKEN,
+    CONF_TOKEN_EXPIRES_AT,
+    DOMAIN,
+    HAAPI_AUTHZ_URL,
+    MANUFACTURER,
+    OAUTH_ACR,
+    OAUTH_CLIENT_ID,
+    OAUTH_REDIRECT_URI,
+    OAUTH_SCOPE,
+    TOKEN_URL,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _build_auth_url(code_challenge: str) -> str:
+    params = urlencode({
+        "client_id": OAUTH_CLIENT_ID,
+        "response_type": "code",
+        "scope": OAUTH_SCOPE,
+        "redirect_uri": OAUTH_REDIRECT_URI,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+        "acr": OAUTH_ACR,
+        "prompt": "login",
+    })
+    return f"{HAAPI_AUTHZ_URL}?{params}"
+
+
+async def _probe_addon(session: aiohttp.ClientSession, url: str) -> bool:
+    """Return True if the E.ON Auth add-on is reachable at the given URL."""
+    try:
+        async with session.get(
+            f"{url.rstrip('/')}/health",
+            timeout=aiohttp.ClientTimeout(total=4),
+        ) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+class EonConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Handle a config flow for E.ON Sweden."""
+
+    VERSION = 1
+
+    def __init__(self) -> None:
+        self._personnummer: str = ""
+        self._password: str = ""
+        self._access_token: str = ""
+        self._refresh_token: str = ""
+        self._addon_url: str = ""
+        self._facilities: list[dict[str, Any]] = []
+        self._code_verifier: str = ""
+        self._auth_url: str = ""
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Step 1: enter credentials and optional add-on URL."""
+        errors: dict[str, str] = {}
+
+        # Probe whether the add-on is running at the default URL
+        session = async_create_clientsession(self.hass)
+        addon_available = await _probe_addon(session, ADDON_AUTH_DEFAULT_URL)
+
+        if user_input is not None:
+            personnummer = user_input[CONF_PERSONNUMMER].strip()
+            password = user_input[CONF_PASSWORD]
+            addon_url = user_input.get(CONF_ADDON_URL, "").strip() or (
+                ADDON_AUTH_DEFAULT_URL if addon_available else ""
+            )
+
+            await self.async_set_unique_id(personnummer)
+            self._abort_if_unique_id_configured()
+
+            client = EonApiClient(personnummer, password, session, addon_url=addon_url or None)
+
+            try:
+                await client.authenticate()
+                facilities = await client.get_facilities()
+            except EonAuthError:
+                errors["base"] = "invalid_auth"
+            except EonApiError as err:
+                _LOGGER.warning("E.ON API error during setup: %s", err)
+                if "playwright" in str(err).lower() or "subprocess" in str(err).lower():
+                    errors["base"] = "playwright_missing"
+                elif "add-on" in str(err).lower() or "Cannot reach" in str(err):
+                    errors[CONF_ADDON_URL] = "addon_unreachable"
+                else:
+                    errors["base"] = "cannot_connect"
+            except Exception:
+                _LOGGER.exception("Unexpected error during config flow")
+                errors["base"] = "unknown"
+            else:
+                self._personnummer = personnummer
+                self._password = password
+                self._access_token = client._bearer_token or ""
+                self._refresh_token = client._refresh_token or ""
+                self._addon_url = addon_url
+                self._facilities = facilities
+
+                if len(facilities) <= 1:
+                    return self._create_entry()
+                return await self.async_step_facilities()
+
+        # Build the schema — show add-on field pre-filled if detected
+        schema = vol.Schema({
+            vol.Required(CONF_PERSONNUMMER): str,
+            vol.Required(CONF_PASSWORD): str,
+            vol.Optional(
+                CONF_ADDON_URL,
+                default=ADDON_AUTH_DEFAULT_URL if addon_available else "",
+            ): str,
+        })
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={
+                "addon_status": (
+                    "✅ E.ON Auth add-on detected and ready."
+                    if addon_available
+                    else "⚠️ E.ON Auth add-on not detected. Install it for fully automatic login. "
+                         "Without it, use the browser login method below."
+                ),
+            },
+        )
+
+    async def async_step_browser_login(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Fallback: user logs in via their own browser and pastes the code."""
+        errors: dict[str, str] = {}
+
+        if not self._code_verifier:
+            self._code_verifier, code_challenge = _pkce_pair()
+            self._auth_url = _build_auth_url(code_challenge)
+
+        if user_input is not None:
+            personnummer = user_input[CONF_PERSONNUMMER].strip()
+            password = user_input[CONF_PASSWORD]
+            raw = user_input["auth_code"].strip()
+            auth_code = _extract_code(raw)
+
+            if not auth_code:
+                errors["auth_code"] = "invalid_code"
+            else:
+                await self.async_set_unique_id(personnummer)
+                self._abort_if_unique_id_configured()
+
+                session = async_create_clientsession(self.hass)
+                client = EonApiClient(personnummer, password, session)
+
+                try:
+                    token_resp = await client._exchange_code(auth_code, self._code_verifier)
+                    client._store_token_response(token_resp)
+                    facilities = await client.get_facilities()
+                except EonAuthError:
+                    errors["auth_code"] = "invalid_code"
+                except EonApiError as err:
+                    _LOGGER.warning("E.ON API error during browser login: %s", err)
+                    errors["base"] = "cannot_connect"
+                except Exception:
+                    _LOGGER.exception("Unexpected error during browser login")
+                    errors["base"] = "unknown"
+                else:
+                    self._personnummer = personnummer
+                    self._password = password
+                    self._access_token = client._bearer_token or ""
+                    self._refresh_token = client._refresh_token or ""
+                    self._facilities = facilities
+
+                    if len(facilities) <= 1:
+                        return self._create_entry()
+                    return await self.async_step_facilities()
+
+        return self.async_show_form(
+            step_id="browser_login",
+            data_schema=vol.Schema({
+                vol.Required(CONF_PERSONNUMMER): str,
+                vol.Required(CONF_PASSWORD): str,
+                vol.Required("auth_code"): str,
+            }),
+            errors=errors,
+            description_placeholders={"auth_url": self._auth_url},
+        )
+
+    async def async_step_facilities(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        if user_input is not None:
+            return self._create_entry(facility_ids=user_input.get(CONF_FACILITY_IDS, []))
+
+        facility_options: dict[str, str] = {}
+        for f in self._facilities:
+            fid = str(
+                f.get("id") or f.get("anlaggningsId") or f.get("facilityId")
+                or f.get("meteringPointId") or "unknown"
+            )
+            label = str(f.get("name") or f.get("namn") or f.get("address") or f.get("adress") or fid)
+            facility_options[fid] = label
+
+        return self.async_show_form(
+            step_id="facilities",
+            data_schema=vol.Schema({
+                vol.Optional(CONF_FACILITY_IDS, default=list(facility_options.keys())): vol.All(
+                    [vol.In(facility_options)],
+                ),
+            }),
+        )
+
+    async def async_step_reauth(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Re-authenticate when refresh token expires."""
+        self._code_verifier = ""
+        return await self.async_step_browser_login()
+
+    def _create_entry(self, facility_ids: list[str] | None = None) -> FlowResult:
+        data: dict[str, Any] = {
+            CONF_PERSONNUMMER: self._personnummer,
+            CONF_PASSWORD: self._password,
+            CONF_ACCESS_TOKEN: self._access_token,
+            CONF_REFRESH_TOKEN: self._refresh_token,
+        }
+        if self._addon_url:
+            data[CONF_ADDON_URL] = self._addon_url
+        if facility_ids:
+            data[CONF_FACILITY_IDS] = facility_ids
+
+        return self.async_create_entry(
+            title=f"{MANUFACTURER} ({self._personnummer})",
+            data=data,
+        )
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: config_entries.ConfigEntry) -> EonOptionsFlow:
+        return EonOptionsFlow(config_entry)
+
+
+class EonOptionsFlow(config_entries.OptionsFlow):
+    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+        self._config_entry = config_entry
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        current_facilities: list[str] = self._config_entry.data.get(CONF_FACILITY_IDS, [])
+        current_addon_url: str = self._config_entry.data.get(CONF_ADDON_URL, ADDON_AUTH_DEFAULT_URL)
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema({
+                vol.Optional(CONF_ADDON_URL, default=current_addon_url): str,
+                vol.Optional(CONF_FACILITY_IDS, default=current_facilities): vol.All(
+                    [str], vol.Length(min=0)
+                ),
+            }),
+        )
+
+
+def _extract_code(value: str) -> str | None:
+    if not value:
+        return None
+    if value.startswith("http"):
+        try:
+            qs = parse_qs(urlparse(value).query)
+            codes = qs.get("code", [])
+            return codes[0] if codes else None
+        except Exception:
+            return None
+    return value if " " not in value else None
+
+
+import base64
+import hashlib
+import logging
+import secrets
+import time
+from typing import Any
+from urllib.parse import urlencode, parse_qs, urlparse
+
+import aiohttp
+import voluptuous as vol
+from homeassistant import config_entries
+from homeassistant.core import callback
+from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers.aiohttp_client import async_create_clientsession
+
 from .api import EonApiClient, EonApiError, EonAuthError, _b64url, _pkce_pair
 from .const import (
     CONF_ACCESS_TOKEN,
