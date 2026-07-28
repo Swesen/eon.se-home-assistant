@@ -21,22 +21,51 @@ from [E.ON Sweden (eon.se)](https://www.eon.se/mitt-e-on/din-forbrukning#/).
 | Latest Data Timestamp | — | Start time of the most recent available slot |
 | Data Delay | h | Hours since the most recent data point *(disabled by default)* |
 
-> **Why no "Energy Today"?** E.ON data has a ~12 hour delay, so today's sensor
-> would read zero all morning and only fill in partially by evening. Use
+> **Why no "Energy Today"?** E.ON data has a ~12-hour delay, so today's sensor
+> would read zero all morning and only partially fill in by evening. Use
 > **Energy Yesterday** (always complete) for the Energy Dashboard instead.
 
 ---
 
-## Installation
+## Prerequisites — E.ON Sweden Auth Add-on
+
+The E.ON login uses [Curity HAAPI](https://curity.io/product/token-service/haapi/)
+with a browser-based WebAssembly attestation (CAT). A headless Chromium browser
+is required **once** for the initial login. After that, the integration uses a
+`refresh_token` over plain HTTP — no browser needed for ongoing use.
+
+Because Home Assistant OS uses Alpine/musl Linux, Playwright cannot be installed
+directly on it. The solution is the **E.ON Sweden Auth** add-on: a small Docker
+container (Debian Bookworm) that runs a headless Chromium and exposes a local
+HTTP endpoint the integration calls automatically.
+
+### Installing the add-on
+
+1. In Home Assistant go to **Settings → Add-ons → Add-on Store → ⋮ → Repositories**.
+2. Add `https://github.com/Swesen/eon.se-home-assistant` and click **Add**.
+3. Find **E.ON Sweden Auth** in the store and click **Install**.
+   > The first install takes a few minutes — it downloads Chromium (~200 MB) and builds the container.
+4. Go to the add-on's **Configuration** tab and fill in:
+   - `personnummer` — your Swedish personal identity number
+   - `password` — your E.ON account password
+5. Start the add-on and confirm it shows **Running** in the **Info** tab.
+
+The integration will automatically detect the running add-on during setup.
+
+Once the add-on is running, proceed to install the integration below.
+
+---
+
+## Integration Installation
 
 ### Via HACS (recommended)
 
 1. In Home Assistant open **HACS → Integrations → ⋮ → Custom repositories**.
-2. Add `https://github.com/YOUR_USERNAME/eon-se-home-assistant` as type **Integration**.
+2. Add `https://github.com/Swesen/eon.se-home-assistant` as type **Integration**.
 3. Find **E.ON Sweden** in HACS and install it.
 4. Restart Home Assistant.
 5. Go to **Settings → Devices & Services → Add Integration** and search for **E.ON Sweden**.
-6. Enter your personnummer and password.
+6. Enter your personnummer and password, then follow the setup wizard.
 
 ### Manual
 
@@ -44,26 +73,6 @@ from [E.ON Sweden (eon.se)](https://www.eon.se/mitt-e-on/din-forbrukning#/).
 2. Restart Home Assistant.
 3. Go to **Settings → Devices & Services → Add Integration** and search for **E.ON Sweden**.
 4. Enter your personnummer and password.
-
----
-
-## ⚠️ Playwright requirement (initial login only)
-
-The E.ON login uses [Curity HAAPI](https://curity.io/product/token-service/haapi/)
-with a browser-based WebAssembly attestation (CAT). A headless Chromium browser
-is required **once** for the initial login. After that, the integration uses a
-`refresh_token` over plain HTTP — no browser needed for ongoing use.
-
-### Installing Playwright on Home Assistant OS
-
-Via the **SSH & Terminal** add-on:
-
-```bash
-pip install playwright
-playwright install chromium --with-deps
-```
-
-This downloads ~200 MB and only needs to be done once.
 
 ---
 
@@ -77,7 +86,7 @@ E.ON meters report data with approximately **12 hours of delay**. This means:
 - The **"Data Delay"** sensor (enable in the HA UI) shows the delay in hours.
 
 There is **no real-time API** — the 15-minute `Quarterly` resolution with its
-~12 h delay is the finest granularity E.ON exposes.
+~12-hour delay is the finest granularity E.ON exposes.
 
 ---
 
@@ -95,110 +104,59 @@ logger:
 Check the Home Assistant log (`/config/home-assistant.log`) for messages
 tagged `custom_components.eon_se`.
 
+### Add-on not detected
+
+If the config flow reports that the add-on was not found, verify:
+
+- The **E.ON Sweden Auth** add-on is installed and **Running**.
+- Port `8099` is not in use by another add-on.
+- The add-on **Configuration** tab has `personnummer` and `password` filled in.
+
+You can also enter the add-on URL manually in the integration setup (default:
+`http://homeassistant.local:8099`).
+
+### Re-authentication
+
+If the refresh token expires (e.g. after a long HA outage), Home Assistant will
+show a **"Re-authentication required"** notification. Click it and follow the
+wizard — the add-on will obtain new tokens automatically.
+
+---
+
+## How it works
+
+```
+HA Integration ──► E.ON Sweden Auth Add-on (port 8099)
+                        │
+                        └─► Headless Chromium (Playwright)
+                                │
+                                └─► Curity HAAPI / WASM attestation
+                                        │
+                                        └─► OAuth2 code + PKCE verifier
+                                                │
+HA Integration ◄────────────────────────────────┘
+     │
+     └─► POST /token → access_token + refresh_token
+             │
+             ├─► GET /api/facilities  → facility list
+             └─► POST /api/consumption_new → 15-min intervals
+```
+
+After the first login, the integration renews the `access_token` silently via
+the `refresh_token` grant — the add-on and Chromium are only used when a brand
+new full login is required.
+
 ---
 
 ## Privacy
 
-Your credentials are stored in the Home Assistant config entry (encrypted in
-`.storage/core.config_entries`). They are only used to authenticate with the
-E.ON Sweden web portal and are never sent anywhere else.
+Your credentials are stored in:
+- The Home Assistant config entry (encrypted in `.storage/core.config_entries`).
+- The add-on's `/data/options.json` on the HA host.
+
+They are only used to authenticate with the E.ON Sweden web portal and are
+never sent anywhere else.
 
 The E.ON Sweden portal is a JavaScript single-page application. The integration
 uses reverse-engineered API endpoints that **may change** when E.ON updates their
-website. If the integration fails to connect, you need to verify the current
-endpoints using your browser's developer tools.
-
-### How to find the real endpoints
-
-#### 1. Find the login endpoint
-
-1. Open **Chrome / Firefox DevTools** (`F12`) and go to the **Network** tab.
-2. Filter by **Fetch/XHR**.
-3. Navigate to `https://www.eon.se/login/privat/username#/` and log in.
-4. Look for a `POST` request that contains your credentials.
-   - Note the **Request URL** (e.g. something like `/api/auth/login`)
-   - Note the **Request payload** field names (e.g. `username`, `password`, or
-     `personnummer`, `pwd`, etc.)
-5. Update `LOGIN_API_URL` in `const.py` and the `payload` dict in `api.py →
-   authenticate()` to match.
-
-#### 2. Find the facilities endpoint
-
-1. While still logged in, navigate to
-   `https://www.eon.se/mitt-e-on/din-forbrukning#/`
-2. In DevTools Network tab, look for a `GET` request that returns a **JSON list
-   of facilities / anläggningar**.
-3. Update `FACILITIES_API_URL` in `const.py` and adapt the field-name extraction
-   helpers (`_facility_id`, `_facility_name`, `_facility_address`) in
-   `coordinator.py` to match the real JSON keys.
-
-#### 3. Find the CSV export endpoint
-
-1. On the consumption page, trigger a CSV export (click the export/download
-   button for a date range with 15-min resolution).
-2. In DevTools Network tab, find the request that triggers the file download.
-   - Note the **URL**
-   - Note the **query parameters** (date range, facility ID, resolution, etc.)
-3. Update `CSV_EXPORT_URL` in `const.py` and the `params` dict in
-   `api.py → get_consumption_csv()` to match.
-
-### Helpful tip
-
-In Chrome DevTools Network tab you can right-click any request and select
-**"Copy as cURL"** or **"Copy as fetch"** to get a ready-made command you can
-test in a terminal before updating the integration code.
-
----
-
-## CSV format reference
-
-The exported file uses semicolon (`;`) as delimiter and comma (`,`) as decimal
-separator. It has two sections separated by a blank line:
-
-```
-Anläggnings-id;Tidpunkt för export;Energiprodukt;Starttidpunkt;Sluttidpunkt;Måttenhet
-735999114000386913;2026-07-27 11:35:54;Aktiv energi;2026-07-26 00:00;2026-07-27 01:00;kWh
-
-Starttidpunkt;Sluttidpunkt;Energiriktning;Kvalitet;Kvantitet
-2026-07-26 00:00;2026-07-26 00:15:00;Förbrukning;Uppmätt;0,052
-...
-```
-
-The `parse_csv()` method in `api.py` handles this format automatically.
-
----
-
-## Data delay
-
-E.ON meters report data with approximately **12 hours of delay**. This means:
-
-- During the morning, you will typically see data up to midnight or the early
-  hours of the current day.
-- The **"Energy Today"** sensor may read `0.0` in the morning until the first
-  intervals of today become available.
-- The **"Latest Data Timestamp"** sensor shows exactly when the most recent
-  available measurement is from.
-
----
-
-## Troubleshooting
-
-- Enable debug logging in `configuration.yaml`:
-
-```yaml
-logger:
-  default: warning
-  logs:
-    custom_components.eon_se: debug
-```
-
-- Check the Home Assistant log (`/config/home-assistant.log`) for messages
-  tagged `custom_components.eon_se`.
-
----
-
-## Privacy
-
-Your credentials are stored in the Home Assistant config entry (encrypted in
-`.storage/core.config_entries`). They are only used to authenticate with the
-E.ON Sweden web portal and are never sent anywhere else.
+website. If the integration stops working, please open an issue on GitHub.
