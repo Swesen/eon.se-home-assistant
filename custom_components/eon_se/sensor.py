@@ -111,7 +111,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up E.ON sensor entities."""
-    coordinator: EonCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: EonCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
     entities: list[EonSensor] = []
     for facility_id, facility_data in (coordinator.data or {}).items():

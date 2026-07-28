@@ -1,12 +1,17 @@
 """
-get_tokens.py – Obtain E.ON access + refresh tokens on your PC.
+get_tokens.py – Obtain E.ON tokens and optionally push them to Home Assistant.
 
 Run this script on a machine that has Playwright installed (your PC, not HA).
-It will authenticate with E.ON and print the tokens for you to paste into
-the Home Assistant config flow ("Paste tokens" option).
 
 Usage:
+    # Print tokens (paste into HA config flow manually):
     python get_tokens.py
+
+    # Authenticate AND push tokens directly to HA (no copy-pasting needed):
+    python get_tokens.py --push https://homeassistant.swesen.net --token YOUR_HA_TOKEN
+
+How to get a HA long-lived access token:
+    HA → Profile (bottom left) → Long-Lived Access Tokens → Create Token
 
 Requirements:
     pip install aiohttp playwright
@@ -17,6 +22,7 @@ import sys, io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
+import argparse
 import asyncio
 import getpass
 import importlib.util
@@ -55,13 +61,44 @@ def _load_dotenv(path=".env"):
     except FileNotFoundError:
         pass
 
+async def push_to_ha(ha_url: str, ha_token: str, access_token: str, refresh_token: str) -> None:
+    """Call the eon_se.push_tokens service on Home Assistant."""
+    url = f"{ha_url.rstrip('/')}/api/services/eon_se/push_tokens"
+    headers = {
+        "Authorization": f"Bearer {ha_token}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=payload, headers=headers, ssl=False) as resp:
+            if resp.status in (200, 201):
+                print("✓ Tokens pushed to Home Assistant successfully!")
+            else:
+                body = await resp.text()
+                print(f"✗ Push failed (HTTP {resp.status}): {body[:300]}")
+                sys.exit(1)
+
 async def main():
+    parser = argparse.ArgumentParser(description="Get E.ON tokens and optionally push to HA")
+    parser.add_argument("--push", metavar="HA_URL",
+                        help="Push tokens to HA at this URL, e.g. https://homeassistant.swesen.net")
+    parser.add_argument("--token", metavar="HA_TOKEN",
+                        help="HA long-lived access token (or set HA_TOKEN env var)")
+    args = parser.parse_args()
+
     _load_dotenv()
 
     personnummer = os.environ.get("EON_PERSONNUMMER") or input("Personnummer (YYYYMMDDXXXX): ").strip()
     password     = os.environ.get("EON_PASSWORD")     or getpass.getpass("Password: ")
+    ha_token     = args.token or os.environ.get("HA_TOKEN", "")
 
-    print("\nAuthenticating with E.ON (this opens a headless browser — takes ~10 seconds)…\n")
+    if args.push and not ha_token:
+        ha_token = getpass.getpass("HA long-lived access token: ")
+
+    print("\nAuthenticating with E.ON (opens a headless browser — ~10 seconds)…\n")
 
     async with aiohttp.ClientSession() as session:
         client = apimod.EonApiClient(personnummer, password, session)
@@ -71,15 +108,21 @@ async def main():
             print(f"\n✗ Authentication failed: {e}")
             sys.exit(1)
 
-    print("✓ Authentication successful!\n")
-    print("=" * 60)
-    print("Paste these values into the Home Assistant config flow:")
-    print("=" * 60)
-    print(f"\nAccess token:\n{client._bearer_token}\n")
-    print(f"Refresh token:\n{client._refresh_token}\n")
-    print("=" * 60)
-    print("\nNote: The access token expires in ~15 minutes, but Home Assistant")
-    print("will use the refresh token to renew it automatically — no browser needed.")
+    print("✓ Authenticated!\n")
+
+    if args.push:
+        print(f"Pushing tokens to {args.push} …")
+        await push_to_ha(args.push, ha_token, client._bearer_token, client._refresh_token)
+    else:
+        print("=" * 60)
+        print("Paste these into the Home Assistant config flow:")
+        print("=" * 60)
+        print(f"\nAccess token:\n{client._bearer_token}\n")
+        print(f"Refresh token:\n{client._refresh_token}\n")
+        print("=" * 60)
+        print("\nTip: next time run with --push to skip copy-pasting:")
+        print(f"  python get_tokens.py --push https://YOUR-HA-URL --token YOUR_HA_TOKEN")
 
 if __name__ == "__main__":
     asyncio.run(main())
+

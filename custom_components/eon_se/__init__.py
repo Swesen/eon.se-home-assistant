@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import logging
+import time
 
+import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
+from homeassistant.helpers import config_validation as cv
 
 from .api import EonApiClient
 from .const import (
@@ -23,10 +26,17 @@ _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
+SERVICE_PUSH_TOKENS = "push_tokens"
+SERVICE_PUSH_TOKENS_SCHEMA = vol.Schema(
+    {
+        vol.Required("access_token"): cv.string,
+        vol.Required("refresh_token"): cv.string,
+    }
+)
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up E.ON Sweden from a config entry."""
-    import time as _time
 
     personnummer: str = entry.data[CONF_PERSONNUMMER]
     password: str = entry.data[CONF_PASSWORD]
@@ -36,15 +46,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     client = EonApiClient(personnummer, password, session)
 
     # Restore saved tokens so we don't need Playwright on every HA restart.
-    # The coordinator's first update will call ensure_token() which refreshes
-    # via refresh_token (HTTP only) if the access_token has expired.
     saved_access = entry.data.get(CONF_ACCESS_TOKEN, "")
     saved_refresh = entry.data.get(CONF_REFRESH_TOKEN, "")
     if saved_access:
         client._bearer_token = saved_access
         client._refresh_token = saved_refresh or None
-        # Assume token may have expired; ensure_token() will refresh it via HTTP
-        client._token_expires_at = _time.monotonic()  # force refresh on first call
+        client._token_expires_at = time.monotonic()  # force refresh on first call
         _LOGGER.debug("Restored saved tokens for %s", personnummer)
 
     async def _persist_tokens() -> None:
@@ -65,9 +72,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = EonCoordinator(hass, client, facility_filter)
     await coordinator.async_config_entry_first_refresh()
 
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
+        "coordinator": coordinator,
+        "client": client,
+    }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Register the push_tokens service (called by get_tokens.py --push)
+    async def handle_push_tokens(call: ServiceCall) -> None:
+        """Accept fresh tokens pushed from get_tokens.py running on a PC."""
+        new_access = call.data["access_token"]
+        new_refresh = call.data["refresh_token"]
+        client._bearer_token = new_access
+        client._refresh_token = new_refresh
+        client._token_expires_at = time.monotonic() + 840  # 14 min
+        await _persist_tokens()
+        await coordinator.async_request_refresh()
+        _LOGGER.info("Tokens updated via push_tokens service call")
+
+    if not hass.services.has_service(DOMAIN, SERVICE_PUSH_TOKENS):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_PUSH_TOKENS,
+            handle_push_tokens,
+            schema=SERVICE_PUSH_TOKENS_SCHEMA,
+        )
+
     return True
 
 
