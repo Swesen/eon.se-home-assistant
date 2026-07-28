@@ -129,6 +129,7 @@ class EonConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         session = async_create_clientsession(self.hass)
         detected_addon_url = await _discover_addon_url(session)
         addon_available = detected_addon_url is not None
+        _LOGGER.debug("Config flow: detected_addon_url=%r", detected_addon_url)
 
         if user_input is not None:
             personnummer = user_input[CONF_PERSONNUMMER].strip()
@@ -146,7 +147,10 @@ class EonConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except EonAuthError:
                 errors["base"] = "invalid_auth"
             except EonApiError as err:
-                _LOGGER.warning("E.ON API error during setup: %s", err)
+                _LOGGER.warning(
+                    "E.ON API error during setup (addon_url=%r): %s",
+                    addon_url, err,
+                )
                 err_str = str(err).lower()
                 if "cannot reach auth add-on" in err_str:
                     # Add-on URL was set but HTTP connection failed
