@@ -52,7 +52,8 @@ async def _probe_addon(session: aiohttp.ClientSession, url: str) -> bool:
 
 
 async def _discover_addon_url(session: aiohttp.ClientSession) -> str | None:
-    """Discover the add-on URL via Supervisor API, falling back to direct probe."""
+    """Discover the add-on URL via Supervisor API, falling back to direct probes."""
+    # --- Method 1: Supervisor API (most reliable on HA OS) ---
     supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
     if supervisor_token:
         try:
@@ -69,12 +70,20 @@ async def _discover_addon_url(session: aiohttp.ClientSession) -> str | None:
                         if ip and ip != "0.0.0.0":
                             url = f"http://{ip}:8099"
                             if await _probe_addon(session, url):
+                                _LOGGER.debug("Add-on found via Supervisor API at %s", url)
                                 return url
         except Exception as err:
             _LOGGER.debug("Supervisor API probe failed: %s", err)
 
-    if await _probe_addon(session, ADDON_AUTH_DEFAULT_URL):
-        return ADDON_AUTH_DEFAULT_URL
+    # --- Method 2: Try known HA add-on network hostnames ---
+    for candidate in (
+        ADDON_AUTH_DEFAULT_URL,              # http://homeassistant.local:8099
+        "http://homeassistant:8099",         # inside Docker network
+        "http://hassio_supervisor:8099",
+    ):
+        if await _probe_addon(session, candidate):
+            _LOGGER.debug("Add-on found at %s", candidate)
+            return candidate
 
     return None
 

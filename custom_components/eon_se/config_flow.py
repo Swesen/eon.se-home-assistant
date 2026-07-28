@@ -66,15 +66,10 @@ async def _probe_addon(session: aiohttp.ClientSession, url: str) -> bool:
 
 
 async def _discover_addon_url(session: aiohttp.ClientSession) -> str | None:
-    """Discover the add-on URL, preferring the Supervisor API over mDNS.
-
-    In HA OS, add-ons run in separate Docker containers and homeassistant.local
-    may not resolve via mDNS from within the HA core container.  The Supervisor
-    API is the reliable way to obtain the add-on's internal IP.
-    """
+    """Discover the add-on URL via Supervisor API, falling back to direct probes."""
     import os
 
-    # --- Method 1: Supervisor API (only works on HA OS / Supervisor) ---
+    # --- Method 1: Supervisor API (most reliable on HA OS) ---
     supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
     if supervisor_token:
         try:
@@ -91,16 +86,20 @@ async def _discover_addon_url(session: aiohttp.ClientSession) -> str | None:
                         if ip and ip != "0.0.0.0":
                             url = f"http://{ip}:8099"
                             if await _probe_addon(session, url):
-                                _LOGGER.debug(
-                                    "Discovered add-on via Supervisor API at %s", url
-                                )
+                                _LOGGER.debug("Add-on found via Supervisor API at %s", url)
                                 return url
         except Exception as err:
             _LOGGER.debug("Supervisor API probe failed: %s", err)
 
-    # --- Method 2: Direct probe at homeassistant.local (works on some setups) ---
-    if await _probe_addon(session, ADDON_AUTH_DEFAULT_URL):
-        return ADDON_AUTH_DEFAULT_URL
+    # --- Method 2: Try known HA add-on network hostnames ---
+    for candidate in (
+        ADDON_AUTH_DEFAULT_URL,              # http://homeassistant.local:8099
+        "http://homeassistant:8099",         # inside Docker network
+        "http://hassio_supervisor:8099",
+    ):
+        if await _probe_addon(session, candidate):
+            _LOGGER.debug("Add-on found at %s", candidate)
+            return candidate
 
     return None
 
@@ -149,14 +148,20 @@ class EonConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except EonApiError as err:
                 _LOGGER.warning("E.ON API error during setup: %s", err)
                 err_str = str(err).lower()
-                if "playwright" in err_str or "subprocess" in err_str or "no output" in err_str:
-                    errors["base"] = "playwright_missing"
-                elif "add-on" in err_str or "Cannot reach" in str(err):
+                if "cannot reach auth add-on" in err_str:
+                    # Add-on URL was set but HTTP connection failed
                     errors[CONF_ADDON_URL] = "addon_unreachable"
+                elif "add-on returned http" in err_str or "browser auth failed" in err_str or "browser auth timed out" in err_str:
+                    # Add-on was reached but Playwright/auth inside it failed
+                    errors["base"] = "auth_failed"
+                elif "playwright" in err_str or "subprocess" in err_str or "no output" in err_str:
+                    # Local Playwright attempted (no add-on) and failed
+                    errors["base"] = "playwright_missing" if not addon_url else "auth_failed"
                 elif "token exchange" in err_str:
                     errors["base"] = "cannot_connect"
                 else:
-                    errors["base"] = "addon_not_running"
+                    # Catch-all: no add-on was configured/found
+                    errors["base"] = "addon_not_running" if not addon_url else "unknown"
             except Exception:
                 _LOGGER.exception("Unexpected error during config flow")
                 errors["base"] = "unknown"
