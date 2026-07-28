@@ -65,37 +65,35 @@ async def _probe_addon(session: aiohttp.ClientSession, url: str) -> bool:
         return False
 
 
-async def _discover_addon_url(session: aiohttp.ClientSession) -> str | None:
-    """Discover the add-on URL via Supervisor API, falling back to direct probes."""
-    import os
-
-    # --- Method 1: Supervisor API (most reliable on HA OS) ---
-    supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
-    if supervisor_token:
+async def _discover_addon_url(
+    session: aiohttp.ClientSession,
+    hass: Any | None = None,
+) -> str | None:
+    """Discover the add-on URL using HA's hassio helper, then direct probes."""
+    # --- Method 1: HA hassio integration (works on HA OS, no token needed) ---
+    if hass is not None:
         try:
-            async with session.get(
-                "http://supervisor/addons/eon_se_auth/info",
-                headers={"Authorization": f"Bearer {supervisor_token}"},
-                timeout=aiohttp.ClientTimeout(total=5),
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json(content_type=None)
-                    addon_data = data.get("data", {})
-                    if addon_data.get("state") == "started":
-                        ip = addon_data.get("ip_address", "")
+            from homeassistant.components.hassio import async_get_addon_info, is_hassio
+            if is_hassio(hass):
+                try:
+                    info = await async_get_addon_info(hass, "eon_se_auth")
+                    if info and info.get("state") == "started":
+                        ip = info.get("ip_address", "")
                         if ip and ip != "0.0.0.0":
                             url = f"http://{ip}:8099"
                             if await _probe_addon(session, url):
-                                _LOGGER.debug("Add-on found via Supervisor API at %s", url)
+                                _LOGGER.debug("Add-on found via hassio helper at %s", url)
                                 return url
-        except Exception as err:
-            _LOGGER.debug("Supervisor API probe failed: %s", err)
+                except Exception as err:
+                    _LOGGER.debug("hassio addon info failed: %s", err)
+        except ImportError:
+            pass
 
-    # --- Method 2: Try known HA add-on network hostnames ---
+    # --- Method 2: Direct probes at well-known addresses ---
     for candidate in (
-        ADDON_AUTH_DEFAULT_URL,              # http://homeassistant.local:8099
-        "http://homeassistant:8099",         # inside Docker network
-        "http://hassio_supervisor:8099",
+        "http://172.30.33.2:8099",       # common HA OS add-on IP
+        ADDON_AUTH_DEFAULT_URL,           # http://homeassistant.local:8099
+        "http://homeassistant:8099",
     ):
         if await _probe_addon(session, candidate):
             _LOGGER.debug("Add-on found at %s", candidate)
@@ -127,7 +125,7 @@ class EonConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         # Discover the add-on URL (Supervisor API → direct probe fallback)
         session = async_create_clientsession(self.hass)
-        detected_addon_url = await _discover_addon_url(session)
+        detected_addon_url = await _discover_addon_url(session, self.hass)
         addon_available = detected_addon_url is not None
         _LOGGER.debug("Config flow: detected_addon_url=%r", detected_addon_url)
 
