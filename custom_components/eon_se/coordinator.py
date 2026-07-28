@@ -8,6 +8,7 @@ from typing import Any
 import aiohttp
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed
 
 from .api import EonApiClient, EonApiError, EonAuthError
 from .const import (
@@ -58,6 +59,7 @@ class EonCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         hass: HomeAssistant,
         client: EonApiClient,
         facility_filter: list[str] | None = None,
+        config_entry=None,
     ) -> None:
         super().__init__(
             hass,
@@ -67,6 +69,7 @@ class EonCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._client = client
         self._facility_filter = facility_filter or []
+        self._config_entry = config_entry
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch updated data from E.ON Sweden."""
@@ -76,7 +79,7 @@ class EonCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self._client.ensure_token()
             facilities = await self._client.get_facilities()
         except EonAuthError as err:
-            raise UpdateFailed(f"Authentication error: {err}") from err
+            raise ConfigEntryAuthFailed(f"E.ON re-authentication required: {err}") from err
         except EonApiError as err:
             raise UpdateFailed(f"API error: {err}") from err
 

@@ -3,6 +3,60 @@
     "step": {
       "user": {
         "title": "E.ON Sweden – Setup",
+        "description": "Choose how to authenticate with E.ON Sweden.",
+        "data": {
+          "auth_method": "Authentication method"
+        }
+      },
+      "browser_login": {
+        "title": "E.ON Sweden – Log in with your browser",
+        "description": "**Step 1 –** Open this link in your browser and log in with your E.ON credentials:\n\n[Open E.ON login]({auth_url})\n\n**Step 2 –** After logging in you will be redirected to eon.se. The URL in your browser will look like:\n`https://www.eon.se/?code=XXXXXX&state=...`\n\nCopy either the full URL **or** just the `code=` value and paste it below.\n\n**Step 3 –** Also enter your personnummer and password so the integration can re-authenticate automatically if needed.",
+        "data": {
+          "personnummer": "Personal identity number (personnummer)",
+          "password": "Password",
+          "auth_code": "Auth code or redirect URL from your browser"
+        }
+      },
+      "credentials": {
+        "title": "E.ON Sweden – Log in (Playwright)",
+        "description": "Enter your credentials. A headless Chromium browser will be launched on this machine (requires Playwright to be installed).",
+        "data": {
+          "personnummer": "Personal identity number (personnummer)",
+          "password": "Password"
+        }
+      },
+      "facilities": {
+        "title": "Select facilities",
+        "description": "Choose which metering facilities to include. All are selected by default.",
+        "data": {
+          "facility_ids": "Facilities"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid personnummer or password.",
+      "invalid_code": "Invalid or expired auth code. Please open the login link again and paste the new code.",
+      "cannot_connect": "Could not connect to E.ON Sweden. Check your internet connection.",
+      "playwright_missing": "Playwright is not installed on this machine. Use the browser login method instead.",
+      "unknown": "An unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This E.ON account is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "E.ON Sweden options",
+        "data": {
+          "facility_ids": "Facility IDs to include (leave empty for all)"
+        }
+      }
+    }
+  }
+}
+
+        "title": "E.ON Sweden – Setup",
         "description": "Choose how to authenticate.\n\n**Credentials** — Home Assistant will open a headless browser to log in (requires Playwright, not available on HA OS).\n\n**Paste tokens** — Run the `get_tokens.py` helper script on your PC, then paste the tokens here. No browser needed on HA.",
         "data": {
           "auth_method": "Authentication method"
